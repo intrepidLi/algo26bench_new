@@ -1,0 +1,43 @@
+[importlinter]
+root_package = algo26bench
+
+[importlinter:contract:layers]
+name = Internal layers point downward
+type = layers
+layers =
+    algo26bench.bench
+    algo26bench.engine
+    algo26bench.recipes
+    algo26bench.nn
+    algo26bench.data
+    algo26bench.core
+
+[importlinter:contract:engine-boundary]
+name = Engine depends only on core
+type = forbidden
+source_modules =
+    algo26bench.engine
+forbidden_modules =
+    algo26bench.data
+    algo26bench.nn
+    algo26bench.recipes
+    algo26bench.bench
+
+[importlinter:contract:nn-standalone]
+name = NN is standalone PyTorch
+type = forbidden
+source_modules =
+    algo26bench.nn
+forbidden_modules =
+    algo26bench.core
+    algo26bench.data
+    algo26bench.recipes
+    algo26bench.engine
+    algo26bench.bench
+
+[importlinter:contract:recipe-independence]
+name = Recipes do not import each other
+type = independence
+modules =
+    algo26bench.recipes.hyformer
+    algo26bench.recipes.onetrans
