@@ -8,8 +8,14 @@ import torch
 from algo26bench.core.types import DataContext, RawExample
 from algo26bench.data.view import (
     PaddedSequence,
-    collate_raw_examples,
-    pad_ragged_sequence,
+    pad_domain,
+    stack_candidates,
+    stack_dense,
+    stack_group_ids,
+    stack_labels,
+    stack_sample_ids,
+    stack_scalars,
+    validate_examples,
 )
 
 
@@ -48,21 +54,19 @@ class HyFormerCollator:
         self.context = context
 
     def __call__(self, examples: Sequence[RawExample]) -> HyFormerBatch:
-        raw = collate_raw_examples(
-            examples, self.context.data_spec, self.context.task_set
-        )
-        sequences = {
-            domain.name: pad_ragged_sequence(
-                raw.sequences[domain.name], domain.max_len, left_pad=False
-            )
-            for domain in self.context.data_spec.sequence_domains
-        }
+        spec = self.context.data_spec
+        validate_examples(examples, spec, self.context.task_set)
+        scalar_names = tuple(field.name for field in spec.scalar_fields)
+        candidate_names = tuple(field.name for field in spec.candidate_fields)
         return HyFormerBatch(
-            scalars=raw.scalars,
-            dense=raw.dense,
-            candidates=raw.candidates,
-            sequences=sequences,
-            labels=raw.labels,
-            sample_ids=raw.sample_ids,
-            group_ids=raw.group_ids,
+            scalars=stack_scalars(examples, scalar_names),
+            dense=stack_dense(examples),
+            candidates=stack_candidates(examples, candidate_names),
+            sequences={
+                domain.name: pad_domain(examples, domain, left_pad=False)
+                for domain in spec.sequence_domains
+            },
+            labels=stack_labels(examples, self.context.task_set),
+            sample_ids=stack_sample_ids(examples),
+            group_ids=stack_group_ids(examples),
         )

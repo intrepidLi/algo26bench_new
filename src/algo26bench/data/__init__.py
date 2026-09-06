@@ -1,10 +1,26 @@
 from .synthetic import SyntheticRankingDataset, make_synthetic_context
-from .view import PaddedSequence, collate_raw_examples, pad_ragged_sequence
+from .view import (
+    PaddedSequence,
+    pad_domain,
+    stack_candidates,
+    stack_dense,
+    stack_group_ids,
+    stack_labels,
+    stack_sample_ids,
+    stack_scalars,
+    validate_examples,
+)
 
 __all__ = [
     "PaddedSequence",
     "SyntheticRankingDataset",
-    "collate_raw_examples",
     "make_synthetic_context",
-    "pad_ragged_sequence",
+    "pad_domain",
+    "stack_candidates",
+    "stack_dense",
+    "stack_group_ids",
+    "stack_labels",
+    "stack_sample_ids",
+    "stack_scalars",
+    "validate_examples",
 ]

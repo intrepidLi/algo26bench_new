@@ -8,8 +8,14 @@ import torch
 from algo26bench.core.types import DataContext, RawExample
 from algo26bench.data.view import (
     PaddedSequence,
-    collate_raw_examples,
-    pad_ragged_sequence,
+    pad_domain,
+    stack_candidates,
+    stack_dense,
+    stack_group_ids,
+    stack_labels,
+    stack_sample_ids,
+    stack_scalars,
+    validate_examples,
 )
 
 from .config import OneTransConfig
@@ -66,16 +72,16 @@ class OneTransCollator:
         self.domain_indices = {name: index for index, name in enumerate(names)}
 
     def __call__(self, examples: Sequence[RawExample]) -> OneTransBatch:
-        raw = collate_raw_examples(
-            examples, self.context.data_spec, self.context.task_set
-        )
+        spec = self.context.data_spec
+        validate_examples(examples, spec, self.context.task_set)
+        scalar_names = tuple(field.name for field in spec.scalar_fields)
+        candidate_names = tuple(field.name for field in spec.candidate_fields)
         padded = {
-            domain.name: pad_ragged_sequence(
-                raw.sequences[domain.name], domain.max_len, left_pad=False
-            )
-            for domain in self.context.data_spec.sequence_domains
+            domain.name: pad_domain(examples, domain, left_pad=False)
+            for domain in spec.sequence_domains
         }
-        batch_size = raw.batch_size
+
+        batch_size = len(examples)
         max_tokens = self.config.max_sequence_tokens
         merge_source = torch.full((batch_size, max_tokens), -1, dtype=torch.long)
         merge_position = torch.full((batch_size, max_tokens), -1, dtype=torch.long)
@@ -120,14 +126,14 @@ class OneTransCollator:
                 sequence_valid[row, target] = True
 
         return OneTransBatch(
-            scalars=raw.scalars,
-            dense=raw.dense,
-            candidates=raw.candidates,
+            scalars=stack_scalars(examples, scalar_names),
+            dense=stack_dense(examples),
+            candidates=stack_candidates(examples, candidate_names),
             sequences=padded,
             merge_source=merge_source,
             merge_position=merge_position,
             sequence_valid=sequence_valid,
-            labels=raw.labels,
-            sample_ids=raw.sample_ids,
-            group_ids=raw.group_ids,
+            labels=stack_labels(examples, self.context.task_set),
+            sample_ids=stack_sample_ids(examples),
+            group_ids=stack_group_ids(examples),
         )
