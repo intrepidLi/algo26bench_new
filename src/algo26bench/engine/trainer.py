@@ -8,9 +8,9 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, IterableDataset
 
-from algo26bench.core.protocols import PreparedRecipe
+from algo26bench.core.protocols import ParamGroupFn, PreparedRecipe, TrainState
 from algo26bench.core.registry import strict_dataclass
 from algo26bench.core.types import MetricPacket, RawExample
 
@@ -69,37 +69,48 @@ class Trainer:
         *,
         shuffle: bool,
     ) -> DataLoader[Any]:
+        common = {
+            "batch_size": self.config.batch_size,
+            "num_workers": self.config.num_workers,
+            "collate_fn": prepared.collator,
+        }
+        if isinstance(dataset, IterableDataset):
+            return DataLoader(dataset, **common)
         generator = torch.Generator().manual_seed(self.config.seed)
         return DataLoader(
             dataset,
-            batch_size=self.config.batch_size,
             shuffle=shuffle,
-            num_workers=self.config.num_workers,
-            collate_fn=prepared.collator,
             generator=generator,
+            **common,
         )
 
-    def _optimizers(self, module: torch.nn.Module) -> list[torch.optim.Optimizer]:
-        embedding_parameters = []
-        dense_parameters = []
-        for name, parameter in module.named_parameters():
-            if not parameter.requires_grad:
-                continue
-            if ".tables." in name:
-                embedding_parameters.append(parameter)
-            else:
-                dense_parameters.append(parameter)
+    def _optimizers(
+        self,
+        module: torch.nn.Module,
+        param_groups_fn: ParamGroupFn | None,
+    ) -> list[torch.optim.Optimizer]:
+        if param_groups_fn is None:
+            return [
+                torch.optim.AdamW(
+                    module.parameters(),
+                    lr=self.config.dense_learning_rate,
+                    weight_decay=self.config.weight_decay,
+                )
+            ]
+        groups = param_groups_fn(module)
+        sparse_params = [p for g in groups if g.kind == "sparse" for p in g.params]
+        dense_params = [p for g in groups if g.kind == "dense" for p in g.params]
         optimizers: list[torch.optim.Optimizer] = []
-        if embedding_parameters:
+        if sparse_params:
             optimizers.append(
                 torch.optim.Adagrad(
-                    embedding_parameters, lr=self.config.embedding_learning_rate
+                    sparse_params, lr=self.config.embedding_learning_rate
                 )
             )
-        if dense_parameters:
+        if dense_params:
             optimizers.append(
                 torch.optim.AdamW(
-                    dense_parameters,
+                    dense_params,
                     lr=self.config.dense_learning_rate,
                     weight_decay=self.config.weight_decay,
                 )
@@ -114,41 +125,37 @@ class Trainer:
     ) -> dict[str, Any]:
         self._set_seed()
         module = prepared.module.to(self.device)
-        optimizers = self._optimizers(module)
+        optimizers = self._optimizers(module, prepared.param_groups)
+        state = TrainState(step=0, epoch=0, module=module, optimizers=optimizers)
         train_loader = self._loader(train_dataset, prepared, shuffle=True)
-        steps = 0
         mean_losses: list[float] = []
 
         module.train()
-        for _ in range(self.config.epochs):
+        should_stop = False
+        for epoch in range(self.config.epochs):
+            state.epoch = epoch
+            for callback in prepared.callbacks:
+                callback.on_epoch_start(state)
             for batch in train_loader:
-                batch = batch.to(self.device)
-                for optimizer in optimizers:
-                    optimizer.zero_grad(set_to_none=True)
-                output = module(batch)
-                loss_packet = prepared.objective.loss(output, batch)
-                loss = loss_packet.mean
-                if not bool(torch.isfinite(loss)):
-                    raise FloatingPointError("non-finite training loss")
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(
-                    module.parameters(), self.config.gradient_clip_norm
-                )
-                for optimizer in optimizers:
-                    optimizer.step()
-                mean_losses.append(float(loss.detach().cpu()))
-                steps += 1
-                if self.config.max_steps is not None and steps >= self.config.max_steps:
+                if (
+                    self.config.max_steps is not None
+                    and state.step >= self.config.max_steps
+                ):
+                    should_stop = True
                     break
-            if self.config.max_steps is not None and steps >= self.config.max_steps:
+                loss = self._step(state, batch, prepared)
+                mean_losses.append(loss)
+                for callback in prepared.callbacks:
+                    callback.on_step_end(state)
+            if should_stop:
                 break
 
         metrics = self.evaluate(prepared, validation_dataset)
         summary: dict[str, Any] = {
             "recipe": prepared.name,
             "device": str(self.device),
-            "steps": steps,
-            "train_loss": float(np.mean(mean_losses)),
+            "steps": state.step,
+            "train_loss": float(np.mean(mean_losses)) if mean_losses else float("nan"),
             "validation": metrics,
             "parameters": sum(parameter.numel() for parameter in module.parameters()),
             "fidelity": prepared.fidelity.counts(),
@@ -165,6 +172,28 @@ class Trainer:
                 encoding="utf-8",
             )
         return summary
+
+    def _step(
+        self,
+        state: TrainState,
+        batch: Any,
+        prepared: PreparedRecipe[Any],
+    ) -> float:
+        batch = batch.to(self.device)
+        for optimizer in state.optimizers:
+            optimizer.zero_grad(set_to_none=True)
+        output = state.module(batch)
+        loss = prepared.objective.loss(output, batch).mean
+        if not bool(torch.isfinite(loss)):
+            raise FloatingPointError("non-finite training loss")
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            state.module.parameters(), self.config.gradient_clip_norm
+        )
+        for optimizer in state.optimizers:
+            optimizer.step()
+        state.step += 1
+        return float(loss.detach().cpu())
 
     @torch.no_grad()
     def evaluate(

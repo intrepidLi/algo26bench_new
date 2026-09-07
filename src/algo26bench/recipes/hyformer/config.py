@@ -5,6 +5,18 @@ from dataclasses import dataclass
 from algo26bench.core.registry import strict_dataclass
 
 
+# The three sequence representation encoding strategies of HyFormer Sec. 3.4.1,
+# mapped to the paper equation each one implements.
+ENCODER_VARIANTS: dict[str, tuple[str, str]] = {
+    "transformer": ("full Transformer encoding", "Eq. 5"),
+    "longer": (
+        "LONGER-style cross-attention compression onto the most recent L_H behaviours",
+        "Eq. 6",
+    ),
+    "swiglu": ("decoder-style attention-free SwiGLU encoding", "Eq. 7"),
+}
+
+
 @dataclass(frozen=True)
 class HyFormerConfig:
     embedding_dim: int = 8
@@ -15,6 +27,7 @@ class HyFormerConfig:
     hidden_multiplier: int = 2
     dropout: float = 0.0
     sequence_encoder: str = "transformer"
+    num_short_tokens: int = 4
     semantic_groups: tuple[tuple[str, ...], ...] = ()
 
     @classmethod
@@ -41,7 +54,11 @@ class HyFormerConfig:
             raise ValueError("HyFormer dimensions and layer counts must be positive")
         if self.d_model % self.num_heads:
             raise ValueError("d_model must be divisible by num_heads")
-        if self.sequence_encoder not in {"transformer", "swiglu"}:
-            raise ValueError("sequence_encoder must be transformer or swiglu")
+        if self.sequence_encoder not in ENCODER_VARIANTS:
+            raise ValueError(
+                f"sequence_encoder must be one of {sorted(ENCODER_VARIANTS)}"
+            )
+        if self.num_short_tokens <= 0:
+            raise ValueError("num_short_tokens must be positive")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")

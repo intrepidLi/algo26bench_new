@@ -1,0 +1,39 @@
+{
+  "recipe": "hyformer",
+  "model": {
+    "embedding_dim": 8,
+    "d_model": 56,
+    "num_heads": 4,
+    "num_layers": 2,
+    "num_queries": 1,
+    "hidden_multiplier": 2,
+    "sequence_encoder": "swiglu",
+    "dropout": 0.0
+  },
+  "data": {
+    "kind": "pcvr",
+    "data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/academic_2000w/train/native_parquet_v2",
+    "valid_ratio": 0.01,
+    "train_row_groups": 2,
+    "seq_max_lens": {
+      "seq_a": 32,
+      "seq_b": 32,
+      "seq_c": 64,
+      "seq_d": 64
+    },
+    "shuffle": true,
+    "buffer_rows": 1024,
+    "read_batch_size": 256,
+    "seed": 2026
+  },
+  "training": {
+    "batch_size": 32,
+    "epochs": 1,
+    "max_steps": 5,
+    "dense_learning_rate": 0.0001,
+    "embedding_learning_rate": 0.05,
+    "seed": 2026,
+    "device": "auto",
+    "num_workers": 0
+  }
+}

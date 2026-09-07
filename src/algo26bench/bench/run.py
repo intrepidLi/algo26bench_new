@@ -11,8 +11,11 @@ import torch
 
 import algo26bench.recipes  # noqa: F401 -- registration belongs to bench
 from algo26bench.core.registry import build_recipe
+from algo26bench.core.types import DataContext
 from algo26bench.data.synthetic import SyntheticRankingDataset, make_synthetic_context
 from algo26bench.engine.trainer import Trainer, TrainingConfig
+
+_SYNTHETIC_KEYS = {"kind", "train_size", "validation_size", "seed"}
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -30,14 +33,6 @@ def run(config_path: Path) -> dict[str, Any]:
     recipe_name = str(raw["recipe"])
     model_config = dict(raw.get("model", {}))
     data_config = dict(raw.get("data", {}))
-    unknown_data = set(data_config) - {"kind", "train_size", "validation_size", "seed"}
-    if unknown_data:
-        raise ValueError(f"unknown data config keys: {sorted(unknown_data)}")
-    if data_config.get("kind", "synthetic") != "synthetic":
-        raise ValueError(
-            "this MVP CLI ships only a synthetic adapter; real datasets should "
-            "construct RawExample objects against the same DataContext contract"
-        )
     training = TrainingConfig.from_dict(dict(raw.get("training", {})))
     random.seed(training.seed)
     np.random.seed(training.seed)
@@ -45,19 +40,48 @@ def run(config_path: Path) -> dict[str, Any]:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(training.seed)
 
-    context = make_synthetic_context()
+    context, train_dataset, validation_dataset = _build_data(data_config, training.seed)
     recipe = build_recipe(recipe_name, model_config)
     prepared = recipe.prepare(context)
-    data_seed = int(data_config.get("seed", training.seed))
-    train_dataset = SyntheticRankingDataset(
-        context, size=int(data_config.get("train_size", 128)), seed=data_seed
-    )
-    validation_dataset = SyntheticRankingDataset(
-        context,
-        size=int(data_config.get("validation_size", 64)),
-        seed=data_seed + 1_000_003,
-    )
     return Trainer(training).fit(prepared, train_dataset, validation_dataset)
+
+
+def _build_data(
+    data_config: dict[str, Any], seed: int
+) -> tuple[DataContext, Any, Any]:
+    kind = str(data_config.get("kind", "synthetic"))
+    if kind == "synthetic":
+        unknown = set(data_config) - _SYNTHETIC_KEYS
+        if unknown:
+            raise ValueError(f"unknown synthetic data keys: {sorted(unknown)}")
+        context = make_synthetic_context()
+        data_seed = int(data_config.get("seed", seed))
+        return (
+            context,
+            SyntheticRankingDataset(
+                context, size=int(data_config.get("train_size", 128)), seed=data_seed
+            ),
+            SyntheticRankingDataset(
+                context,
+                size=int(data_config.get("validation_size", 64)),
+                seed=data_seed + 1_000_003,
+            ),
+        )
+    if kind == "pcvr":
+        from algo26bench.data.pcvr import PCVRDataConfig, build_pcvr_datasets
+
+        allowed = {"kind"} | set(PCVRDataConfig.__dataclass_fields__)
+        unknown = set(data_config) - allowed
+        if unknown:
+            raise ValueError(f"unknown pcvr data keys: {sorted(unknown)}")
+        payload = dict(data_config)
+        payload.pop("kind", None)
+        payload.setdefault("seed", seed)
+        schema, train_dataset, valid_dataset = build_pcvr_datasets(
+            PCVRDataConfig.from_dict(payload)
+        )
+        return schema.context, train_dataset, valid_dataset
+    raise ValueError(f"unsupported data.kind={kind!r}")
 
 
 def main() -> None:

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from algo26bench.core.fidelity import (
-    Capability,
-    FidelityCard,
-    FidelityStatus,
-    Mechanism,
-)
+from algo26bench.core.fidelity import FidelityCard, FidelityStatus, Mechanism
 from algo26bench.core.protocols import PreparedRecipe
 from algo26bench.core.registry import register_recipe
 from algo26bench.core.types import DataContext
+from algo26bench.engine.objectives import choose_objective
+from algo26bench.recipes.common import split_embedding_params
 
 from .batch import HyFormerBatch, HyFormerCollator
-from .config import HyFormerConfig
+from .config import ENCODER_VARIANTS, HyFormerConfig
 from .model import HyFormerModel
-from .objective import HyFormerObjective
 
 
 @register_recipe("hyformer")
@@ -50,6 +46,36 @@ class HyFormerRecipe:
                 "HyFormer semantic_groups must cover every scalar/candidate field once"
             )
 
+        encoder_desc, encoder_ref = ENCODER_VARIANTS[self.config.sequence_encoder]
+        encoder_mechanisms = (
+            Mechanism(
+                f"sequence encoding strategy in use: {encoder_desc}",
+                FidelityStatus.FAITHFUL,
+                f"Sec. 3.4.1 {encoder_ref}",
+                "test_hyformer_encoder_variant_selection",
+            ),
+        )
+        if self.config.sequence_encoder == "longer":
+            encoder_mechanisms += (
+                Mechanism(
+                    "S_short is the most recent L_H behaviours of the sequence",
+                    FidelityStatus.FAITHFUL,
+                    "Eq. 6; recent-k beats uniform-k and learnable-k in "
+                    "LONGER (arXiv:2505.04421) Table 2",
+                    "test_hyformer_longer_encoder_selects_recent_tokens",
+                ),
+                Mechanism(
+                    "LONGER's reverse-causal cross-attention mask",
+                    FidelityStatus.ADAPTED,
+                    "LONGER (arXiv:2505.04421) Eq. 10",
+                    reason=(
+                        "HyFormer Eq. 6 states no mask, and this framework stores "
+                        "behaviours earliest-to-latest rather than LONGER's reversed "
+                        "layout, so the compression attends over every valid behaviour"
+                    ),
+                ),
+            )
+
         fidelity = FidelityCard(
             recipe=self.name,
             paper="HyFormer (arXiv:2601.12681v2)",
@@ -67,11 +93,18 @@ class HyFormerRecipe:
                     "test_hyformer_multi_sequence_forward",
                 ),
                 Mechanism(
-                    "layer-wise sequence encoding and query decoding",
+                    "key/value states recomputed per layer from the raw sequence",
                     FidelityStatus.FAITHFUL,
-                    "Eq. 5/7-9 and Eq. 16",
+                    "Eq. 5-8",
+                    "test_hyformer_layerwise_kv_reads_raw_sequence",
+                ),
+                Mechanism(
+                    "query decoding by cross-attention over the layer's key/values",
+                    FidelityStatus.FAITHFUL,
+                    "Eq. 9 and Eq. 16",
                     "test_hyformer_padding_and_empty_sequence_invariance",
                 ),
+                *encoder_mechanisms,
                 Mechanism(
                     "RankMixer rewiring and independent per-token FFN",
                     FidelityStatus.FAITHFUL,
@@ -80,21 +113,23 @@ class HyFormerRecipe:
                 ),
                 Mechanism(
                     "GPU pooling and asynchronous AllReduce",
-                    FidelityStatus.OUT_OF_SCOPE,
+                    FidelityStatus.ADAPTED,
                     "Sec. 3.8",
-                    reason="systems optimization is outside the academic MVP",
+                    reason=(
+                        "systems throughput optimization; Sec. 3.8.2 reports the "
+                        "resulting one-step staleness as lossless, so omitting it "
+                        "does not change model quality"
+                    ),
                 ),
             ),
         )
         fidelity.validate()
+        module = HyFormerModel(context, self.config, groups)
         return PreparedRecipe(
             name=self.name,
-            module=HyFormerModel(context, self.config, groups),
+            module=module,
             collator=HyFormerCollator(context),
-            objective=HyFormerObjective(context.task_set),
+            objective=choose_objective(context.task_set),
             fidelity=fidelity,
-            capability=Capability(
-                needs_multi_sequence=True,
-                notes=("empty sequences are supported with exact mask semantics",),
-            ),
+            param_groups=split_embedding_params,
         )

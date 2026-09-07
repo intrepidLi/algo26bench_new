@@ -1,0 +1,26 @@
+{
+  "recipe": "hyformer",
+  "model": {
+    "embedding_dim": 8,
+    "d_model": 40,
+    "num_heads": 4,
+    "num_layers": 2,
+    "num_queries": 1,
+    "hidden_multiplier": 2,
+    "sequence_encoder": "longer",
+    "num_short_tokens": 4
+  },
+  "data": {
+    "kind": "synthetic",
+    "train_size": 48,
+    "validation_size": 32,
+    "seed": 2026
+  },
+  "training": {
+    "batch_size": 8,
+    "epochs": 1,
+    "max_steps": 3,
+    "seed": 2026,
+    "device": "auto"
+  }
+}

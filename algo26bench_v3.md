@@ -703,3 +703,6 @@ DESIGN.md 是**为工业级 benchmark 而写的设计**，覆盖了 MFU / servin
 v3 = v2 的窄腰 + v2 已跑通的 nn/data 层 + `PreparedRecipe.callbacks` + `TaskKind` + `SoftmaxObjective` + 6 个新算子文件 − 3 个中间层 dataclass − 4 状态 fidelity − 3 条未实现的 policy 协议 − 4 条 track − DESIGN.md 里所有"未来可能会用到"的 hook 点。
 
 工期与 v2 落地 9 篇的估计相当（3 周），但**框架代码量少约 40%**，且**每一处抽象都能指出至少 2 个使用者**。
+
+
+初赛数据：/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/split_v2/train/native_parquet_v2

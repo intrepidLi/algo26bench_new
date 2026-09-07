@@ -8,7 +8,13 @@ from typing import Protocol
 import torch
 import torch.nn.functional as F
 
-from algo26bench.core.types import LossPacket, MetricPacket, ModelOutput, TaskSet
+from algo26bench.core.types import (
+    LossPacket,
+    MetricPacket,
+    ModelOutput,
+    TaskKind,
+    TaskSet,
+)
 
 
 class LabeledBatch(Protocol):
@@ -19,6 +25,12 @@ class LabeledBatch(Protocol):
 
 class BinaryObjective:
     def __init__(self, task_set: TaskSet) -> None:
+        for task in task_set.tasks:
+            if task.kind != TaskKind.BINARY:
+                raise ValueError(
+                    f"BinaryObjective only handles TaskKind.BINARY tasks, "
+                    f"got {task.kind} for task {task.name!r}"
+                )
         self.task_set = task_set
 
     def loss(self, output: ModelOutput, batch: LabeledBatch) -> LossPacket:
@@ -56,4 +68,17 @@ class BinaryObjective:
         return packets
 
 
-__all__ = ["BinaryObjective", "LabeledBatch"]
+def choose_objective(task_set: TaskSet) -> BinaryObjective:
+    """Pick the right objective based on the data-provided task kinds.
+
+    Softmax objectives (for TokenFormer's multi-action head) will land in a
+    follow-up branch; today only BINARY is wired.
+    """
+
+    kinds = {task.kind for task in task_set.tasks}
+    if kinds == {TaskKind.BINARY}:
+        return BinaryObjective(task_set)
+    raise ValueError(f"unsupported task-kind mix: {sorted(kind.name for kind in kinds)}")
+
+
+__all__ = ["BinaryObjective", "LabeledBatch", "choose_objective"]
