@@ -1,6 +1,7 @@
 from .fidelity import FidelityCard, FidelityStatus, Mechanism
 from .protocols import (
     Callback,
+    DistributedInfo,
     Objective,
     ParamGroup,
     PreparedRecipe,
@@ -28,6 +29,7 @@ __all__ = [
     "CategoricalField",
     "DataContext",
     "DataSpec",
+    "DistributedInfo",
     "FidelityCard",
     "FidelityStatus",
     "LossPacket",

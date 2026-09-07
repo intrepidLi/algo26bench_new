@@ -35,6 +35,27 @@ class Objective(Protocol[TBatch]):
     def metrics(self, output: ModelOutput, batch: TBatch) -> Sequence[MetricPacket]: ...
 
 
+@dataclass(frozen=True)
+class DistributedInfo:
+    """Snapshot of the process's place in a DDP world.
+
+    A single-process run reports ``world_size=1``; ``enabled`` is the boolean
+    consumers should branch on.  ``local_rank`` picks the CUDA device.
+    """
+
+    rank: int = 0
+    local_rank: int = 0
+    world_size: int = 1
+
+    @property
+    def enabled(self) -> bool:
+        return self.world_size > 1
+
+    @property
+    def is_main(self) -> bool:
+        return self.rank == 0
+
+
 @dataclass
 class TrainState:
     """Mutable state exposed to Callback methods."""
@@ -43,6 +64,7 @@ class TrainState:
     epoch: int
     module: torch.nn.Module
     optimizers: list[torch.optim.Optimizer]
+    distributed: DistributedInfo = field(default_factory=DistributedInfo)
 
 
 @runtime_checkable

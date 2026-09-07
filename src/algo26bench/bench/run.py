@@ -13,6 +13,7 @@ import algo26bench.recipes  # noqa: F401 -- registration belongs to bench
 from algo26bench.core.registry import build_recipe
 from algo26bench.core.types import DataContext
 from algo26bench.data.synthetic import SyntheticRankingDataset, make_synthetic_context
+from algo26bench.engine import distributed as ddp
 from algo26bench.engine.trainer import Trainer, TrainingConfig
 
 _SYNTHETIC_KEYS = {"kind", "train_size", "validation_size", "seed"}
@@ -40,14 +41,24 @@ def run(config_path: Path) -> dict[str, Any]:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(training.seed)
 
-    context, train_dataset, validation_dataset = _build_data(data_config, training.seed)
+    distributed = ddp.read_env()
+    context, train_dataset, validation_dataset = _build_data(
+        data_config, training.seed, distributed.rank, distributed.world_size
+    )
     recipe = build_recipe(recipe_name, model_config)
     prepared = recipe.prepare(context)
-    return Trainer(training).fit(prepared, train_dataset, validation_dataset)
+    trainer = Trainer(training, distributed=distributed)
+    try:
+        return trainer.fit(prepared, train_dataset, validation_dataset)
+    finally:
+        trainer.close()
 
 
 def _build_data(
-    data_config: dict[str, Any], seed: int
+    data_config: dict[str, Any],
+    seed: int,
+    rank: int,
+    world_size: int,
 ) -> tuple[DataContext, Any, Any]:
     kind = str(data_config.get("kind", "synthetic"))
     if kind == "synthetic":
@@ -78,7 +89,9 @@ def _build_data(
         payload.pop("kind", None)
         payload.setdefault("seed", seed)
         schema, train_dataset, valid_dataset = build_pcvr_datasets(
-            PCVRDataConfig.from_dict(payload)
+            PCVRDataConfig.from_dict(payload),
+            rank=rank,
+            world_size=world_size,
         )
         return schema.context, train_dataset, valid_dataset
     raise ValueError(f"unsupported data.kind={kind!r}")
@@ -88,7 +101,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run an algo26bench recipe")
     parser.add_argument("--config", type=Path, required=True)
     arguments = parser.parse_args()
-    print(json.dumps(run(arguments.config), indent=2, sort_keys=True))
+    summary = run(arguments.config)
+    # In DDP, only the main rank prints — all others have the same summary
+    # minus the validation dict, which we skip on non-main ranks anyway.
+    if int(summary.get("rank", 0)) == 0:
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

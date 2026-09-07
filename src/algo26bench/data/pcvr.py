@@ -599,7 +599,17 @@ class PCVRParquetDataset(IterableDataset[RawExample]):
 
 def build_pcvr_datasets(
     config: PCVRDataConfig,
+    *,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> tuple[PCVRSchema, PCVRParquetDataset, PCVRParquetDataset]:
+    """Build train/valid datasets, optionally sharded by DDP rank.
+
+    Under DDP, each rank sees a disjoint slice of the training row groups
+    (round-robin), and every rank sees the full validation set (only rank 0
+    evaluates, other ranks skip the eval pass).
+    """
+
     schema_path = config.schema_path or os.path.join(config.data_dir, "schema.json")
     schema = load_pcvr_schema(schema_path, config.seq_max_lens)
     groups = list_row_groups(config.data_dir)
@@ -609,6 +619,15 @@ def build_pcvr_datasets(
         train_ratio=config.train_ratio,
         train_row_groups=config.train_row_groups,
     )
+    if world_size > 1:
+        # Round-robin sharding: rank r takes indices [r, r+ws, r+2ws, ...].
+        # This preserves the even-spacing property of split_row_groups.
+        train_indices = train_indices[rank::world_size]
+        if not train_indices:
+            raise ValueError(
+                f"rank {rank} received no training row groups; "
+                f"reduce world_size or increase train_row_groups"
+            )
     train = PCVRParquetDataset(
         schema,
         [groups[index] for index in train_indices],
@@ -617,7 +636,7 @@ def build_pcvr_datasets(
         shuffle=config.shuffle,
         buffer_rows=config.buffer_rows,
         read_batch_size=config.read_batch_size,
-        seed=config.seed,
+        seed=config.seed + rank,
         is_training=True,
     )
     valid_groups = groups[valid_range[0] : valid_range[1]]

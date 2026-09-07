@@ -14,7 +14,7 @@
     "kind": "pcvr",
     "data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/split_v2/train/native_parquet_v2",
     "valid_ratio": 0.02,
-    "train_row_groups": 2,
+    "train_row_groups": 8,
     "seq_max_lens": {
       "seq_a": 32,
       "seq_b": 32,
