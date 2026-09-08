@@ -1,5 +1,13 @@
-from .fidelity import Capability, FidelityCard, FidelityStatus, Mechanism
-from .protocols import Objective, PreparedRecipe, Recipe
+from .fidelity import FidelityCard, FidelityStatus, Mechanism
+from .protocols import (
+    Callback,
+    DistributedInfo,
+    Objective,
+    ParamGroup,
+    PreparedRecipe,
+    Recipe,
+    TrainState,
+)
 from .registry import available_recipes, build_recipe, register_recipe
 from .types import (
     CategoricalField,
@@ -8,19 +16,20 @@ from .types import (
     LossPacket,
     MetricPacket,
     ModelOutput,
-    RaggedSequence,
-    RawBatch,
     RawExample,
+    RawSequence,
     SequenceDomainSpec,
+    TaskKind,
     TaskSet,
     TaskSpec,
 )
 
 __all__ = [
-    "Capability",
+    "Callback",
     "CategoricalField",
     "DataContext",
     "DataSpec",
+    "DistributedInfo",
     "FidelityCard",
     "FidelityStatus",
     "LossPacket",
@@ -28,14 +37,16 @@ __all__ = [
     "MetricPacket",
     "ModelOutput",
     "Objective",
+    "ParamGroup",
     "PreparedRecipe",
-    "RaggedSequence",
-    "RawBatch",
     "RawExample",
+    "RawSequence",
     "Recipe",
     "SequenceDomainSpec",
+    "TaskKind",
     "TaskSet",
     "TaskSpec",
+    "TrainState",
     "available_recipes",
     "build_recipe",
     "register_recipe",

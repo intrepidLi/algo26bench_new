@@ -7,8 +7,6 @@ from enum import Enum
 class FidelityStatus(str, Enum):
     FAITHFUL = "faithful"
     ADAPTED = "adapted"
-    OMITTED = "omitted"
-    OUT_OF_SCOPE = "out_of_scope"
 
 
 @dataclass(frozen=True)
@@ -43,11 +41,3 @@ class FidelityCard:
         for mechanism in self.mechanisms:
             counts[mechanism.status.value] += 1
         return counts
-
-
-@dataclass(frozen=True)
-class Capability:
-    min_meaningful_seq_len: int = 0
-    needs_multi_sequence: bool = False
-    needs_raw_timestamps: bool = False
-    notes: tuple[str, ...] = ()

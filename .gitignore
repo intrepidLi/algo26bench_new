@@ -9,3 +9,11 @@ dist/
 build/
 outputs/
 tests/
+
+answer.json
+
+logs/*
+diag_forward.py
+
+output*
+.importlinter

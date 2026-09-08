@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Any, Mapping
 
 
@@ -35,10 +36,25 @@ class SequenceDomainSpec:
             raise ValueError(f"{self.name}: max_len must be positive")
 
 
+class TaskKind(Enum):
+    BINARY = auto()
+    MULTI_ACTION_SOFTMAX = auto()
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     name: str
     label_key: str
+    kind: TaskKind = TaskKind.BINARY
+    num_classes: int = 2
+
+    def __post_init__(self) -> None:
+        if self.kind == TaskKind.BINARY and self.num_classes != 2:
+            raise ValueError(f"{self.name}: BINARY task must have num_classes == 2")
+        if self.kind == TaskKind.MULTI_ACTION_SOFTMAX and self.num_classes <= 2:
+            raise ValueError(
+                f"{self.name}: MULTI_ACTION_SOFTMAX task must have num_classes > 2"
+            )
 
 
 @dataclass(frozen=True)
@@ -55,18 +71,23 @@ class TaskSet:
 class DataSpec:
     scalar_fields: tuple[CategoricalField, ...]
     candidate_fields: tuple[CategoricalField, ...]
-    dense_dim: int
+    user_dense_dim: int
+    item_dense_dim: int
     sequence_domains: tuple[SequenceDomainSpec, ...]
 
     def __post_init__(self) -> None:
-        if self.dense_dim < 0:
-            raise ValueError("dense_dim cannot be negative")
+        if self.user_dense_dim < 0 or self.item_dense_dim < 0:
+            raise ValueError("dense dims cannot be negative")
         all_names = [field.name for field in self.scalar_fields + self.candidate_fields]
         if len(all_names) != len(set(all_names)):
             raise ValueError("scalar and candidate field names must be unique")
         sequence_names = [domain.name for domain in self.sequence_domains]
         if not sequence_names or len(sequence_names) != len(set(sequence_names)):
             raise ValueError("sequence domain names must be non-empty and unique")
+
+    @property
+    def dense_dim(self) -> int:
+        return self.user_dense_dim + self.item_dense_dim
 
     @property
     def sequence_names(self) -> tuple[str, ...]:
@@ -117,48 +138,6 @@ class RawExample:
     sample_id: Tensor
     group_id: Tensor | None = None
 
-
-@dataclass
-class RaggedSequence:
-    fields: Mapping[str, Tensor]
-    offsets: Tensor
-    timestamps: Tensor
-
-    @property
-    def batch_size(self) -> int:
-        return int(self.offsets.numel() - 1)
-
-    @property
-    def lengths(self) -> Tensor:
-        return self.offsets[1:] - self.offsets[:-1]
-
-    def validate(self) -> None:
-        if self.offsets.ndim != 1 or self.offsets.numel() < 2:
-            raise ValueError("offsets must be [B+1]")
-        if int(self.offsets[0]) != 0:
-            raise ValueError("offsets must start at zero")
-        if not bool((self.offsets[1:] >= self.offsets[:-1]).all()):
-            raise ValueError("offsets must be monotonic")
-        total = int(self.offsets[-1])
-        if self.timestamps.shape != (total,):
-            raise ValueError("timestamp count does not match offsets")
-        for name, values in self.fields.items():
-            if values.shape[0] != total:
-                raise ValueError(f"{name}: value count does not match offsets")
-
-@dataclass
-class RawBatch:
-    scalars: Mapping[str, Tensor]
-    dense: Tensor
-    candidates: Mapping[str, Tensor]
-    sequences: Mapping[str, RaggedSequence]
-    labels: Mapping[str, Tensor]
-    sample_ids: Tensor
-    group_ids: Tensor | None = None
-
-    @property
-    def batch_size(self) -> int:
-        return int(self.sample_ids.shape[0])
 
 @dataclass
 class ModelOutput:

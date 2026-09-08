@@ -27,7 +27,8 @@ def make_synthetic_context() -> DataContext:
                 CategoricalField("context_id", 17),
             ),
             candidate_fields=(item, category),
-            dense_dim=3,
+            user_dense_dim=3,
+            item_dense_dim=0,
             sequence_domains=(
                 SequenceDomainSpec("watch", (item, category), max_len=8),
                 SequenceDomainSpec("search", (item, category), max_len=5),

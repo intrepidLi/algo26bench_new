@@ -1,0 +1,44 @@
+{
+  "recipe": "onetrans",
+  "model": {
+    "embedding_dim": 8,
+    "d_model": 32,
+    "num_heads": 4,
+    "num_layers": 2,
+    "num_ns_tokens": 4,
+    "hidden_multiplier": 2,
+    "merge_mode": "timestamp",
+    "max_sequence_tokens": 48,
+    "pyramid_lengths": [24, 0],
+    "dropout": 0.0
+  },
+  "data": {
+    "kind": "pcvr",
+    "data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/split_v2/train/native_parquet_v2",
+    "eval_data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/predict_v2/native_parquet_v2",
+    "answer_path": "/apdcephfs_fsgm/share_303710656/angel/common/TAAC_2026/ryanylsun/algo26bench_v2/answer.json",
+    "valid_ratio": 0.02,
+    "seq_max_lens": {
+      "seq_a": 32,
+      "seq_b": 32,
+      "seq_c": 32,
+      "seq_d": 32
+    },
+    "shuffle": true,
+    "buffer_rows": 1024,
+    "read_batch_size": 256,
+    "seed": 2026
+  },
+  "training": {
+    "batch_size": 64,
+    "epochs": 3,
+    "seed": 2026,
+    "device": "auto",
+    "num_workers": 0,
+    "output_dir": "output_150w_onetrans_train_eval",
+    "save_best": true,
+    "monitor_task": "pcvr",
+    "monitor_metric": "auc",
+    "monitor_mode": "max"
+  }
+}

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from algo26bench.core.fidelity import (
-    Capability,
-    FidelityCard,
-    FidelityStatus,
-    Mechanism,
-)
+from algo26bench.core.fidelity import FidelityCard, FidelityStatus, Mechanism
 from algo26bench.core.protocols import PreparedRecipe
 from algo26bench.core.registry import register_recipe
 from algo26bench.core.types import DataContext
+from algo26bench.engine.objectives import choose_objective
+from algo26bench.recipes.common import split_embedding_params
 
 from .batch import OneTransBatch, OneTransCollator
 from .config import OneTransConfig
 from .model import OneTransModel
-from .objective import OneTransObjective
 
 
 @register_recipe("onetrans")
@@ -58,7 +54,7 @@ class OneTransRecipe:
                 ),
                 Mechanism(
                     "cross-request KV cache and fused kernels",
-                    FidelityStatus.OUT_OF_SCOPE,
+                    FidelityStatus.ADAPTED,
                     "Sec. 3.5",
                     reason="serving infrastructure is outside the academic MVP",
                 ),
@@ -75,11 +71,7 @@ class OneTransRecipe:
             name=self.name,
             module=OneTransModel(context, self.config),
             collator=OneTransCollator(context, self.config),
-            objective=OneTransObjective(context.task_set),
+            objective=choose_objective(context.task_set),
             fidelity=fidelity,
-            capability=Capability(
-                needs_multi_sequence=True,
-                needs_raw_timestamps=self.config.merge_mode == "timestamp",
-                notes=("timestamp and impact-ordered merge modes are explicit",),
-            ),
+            param_groups=split_embedding_params,
         )

@@ -80,7 +80,11 @@ class OneTransModel(nn.Module):
                 if field.name in embedding_specs and embedding_specs[field.name] != value:
                     raise ValueError(f"inconsistent repeated field spec: {field.name}")
                 embedding_specs[field.name] = value
-        self.embedding_bank = EmbeddingBank(embedding_specs, config.embedding_dim)
+        self.embedding_bank = EmbeddingBank(
+            embedding_specs,
+            config.embedding_dim,
+            emb_skip_threshold=config.emb_skip_threshold,
+        )
         non_sequence_fields = tuple(
             field.name for field in spec.scalar_fields + spec.candidate_fields
         )
