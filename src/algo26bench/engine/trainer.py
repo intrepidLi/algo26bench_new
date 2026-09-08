@@ -38,6 +38,13 @@ class TrainingConfig:
     device: str = "auto"
     num_workers: int = 0
     output_dir: str | None = None
+    # Per-epoch eval + best-checkpoint save. When save_best is on and
+    # output_dir is set, evaluate at every epoch boundary and re-save
+    # model_best.pt / best.json whenever the monitored metric improves.
+    save_best: bool = False
+    monitor_task: str = "pcvr"
+    monitor_metric: str = "auc"
+    monitor_mode: str = "max"
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> "TrainingConfig":
@@ -46,6 +53,10 @@ class TrainingConfig:
             raise ValueError("batch_size and epochs must be positive")
         if config.max_steps is not None and config.max_steps <= 0:
             raise ValueError("max_steps must be positive")
+        if config.monitor_mode not in ("max", "min"):
+            raise ValueError("monitor_mode must be 'max' or 'min'")
+        if config.save_best and not config.output_dir:
+            raise ValueError("save_best requires output_dir")
         return config
 
 
@@ -139,6 +150,7 @@ class Trainer:
                     dense_params,
                     lr=self.config.dense_learning_rate,
                     weight_decay=self.config.weight_decay,
+                    betas=(0.9, 0.98)
                 )
             )
         return optimizers
@@ -180,6 +192,11 @@ class Trainer:
         train_loader = self._loader(train_dataset, prepared, shuffle=True)
         mean_losses: list[float] = []
 
+        best_score: float | None = None
+        best_metrics: dict[str, dict[str, float]] | None = None
+        best_epoch = -1
+        best_step = -1
+
         forward_module.train()
         should_stop = False
         for epoch in range(self.config.epochs):
@@ -197,6 +214,25 @@ class Trainer:
                 mean_losses.append(loss)
                 for callback in prepared.callbacks:
                     callback.on_step_end(state)
+
+            # Epoch-boundary eval + best-checkpoint save.
+            if self.config.save_best:
+                ddp.barrier(self.distributed)
+                if self.distributed.is_main:
+                    forward_module.eval()
+                    metrics = self.evaluate(
+                        prepared, validation_dataset, forward_module
+                    )
+                    forward_module.train()
+                    score = self._monitor_score(metrics)
+                    if score is not None and self._is_better(score, best_score):
+                        best_score = score
+                        best_metrics = metrics
+                        best_epoch = epoch
+                        best_step = state.step
+                        self._save_best(module, score, epoch, state.step, metrics)
+                ddp.barrier(self.distributed)
+
             if should_stop:
                 break
 
@@ -219,6 +255,17 @@ class Trainer:
             "parameters": sum(parameter.numel() for parameter in module.parameters()),
             "fidelity": prepared.fidelity.counts(),
         }
+        if self.config.save_best and self.distributed.is_main:
+            summary["best"] = {
+                "monitor": (
+                    f"{self.config.monitor_task}/"
+                    f"{self.config.monitor_metric} ({self.config.monitor_mode})"
+                ),
+                "score": best_score,
+                "epoch": best_epoch,
+                "step": best_step,
+                "metrics": best_metrics,
+            }
         if self.config.output_dir and self.distributed.is_main:
             output_dir = Path(self.config.output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +279,52 @@ class Trainer:
             )
         ddp.barrier(self.distributed)
         return summary
+
+    def _monitor_score(
+        self, metrics: dict[str, dict[str, float]]
+    ) -> float | None:
+        task = self.config.monitor_task
+        metric = self.config.monitor_metric
+        if task not in metrics:
+            return None
+        value = metrics[task].get(metric)
+        if value is None:
+            return None
+        value = float(value)
+        if not np.isfinite(value):
+            return None
+        return value
+
+    def _is_better(self, score: float, best: float | None) -> bool:
+        if best is None:
+            return True
+        if self.config.monitor_mode == "max":
+            return score > best
+        return score < best
+
+    def _save_best(
+        self,
+        module: torch.nn.Module,
+        score: float,
+        epoch: int,
+        step: int,
+        metrics: dict[str, dict[str, float]],
+    ) -> None:
+        output_dir = Path(self.config.output_dir)  # save_best requires this
+        output_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(module.state_dict(), output_dir / "model_best.pt")
+        payload = {
+            "monitor_task": self.config.monitor_task,
+            "monitor_metric": self.config.monitor_metric,
+            "monitor_mode": self.config.monitor_mode,
+            "score": score,
+            "epoch": epoch,
+            "step": step,
+            "metrics": metrics,
+        }
+        (output_dir / "best.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     def _step(
         self,

@@ -18,6 +18,8 @@ class OneTransConfig:
     max_sequence_tokens: int = 12
     pyramid_lengths: tuple[int, ...] = ()
     domain_order: tuple[str, ...] = ()
+    emb_skip_threshold: int = 0
+    emb_skip_threshold: int = 0
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> "OneTransConfig":

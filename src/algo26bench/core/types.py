@@ -71,18 +71,23 @@ class TaskSet:
 class DataSpec:
     scalar_fields: tuple[CategoricalField, ...]
     candidate_fields: tuple[CategoricalField, ...]
-    dense_dim: int
+    user_dense_dim: int
+    item_dense_dim: int
     sequence_domains: tuple[SequenceDomainSpec, ...]
 
     def __post_init__(self) -> None:
-        if self.dense_dim < 0:
-            raise ValueError("dense_dim cannot be negative")
+        if self.user_dense_dim < 0 or self.item_dense_dim < 0:
+            raise ValueError("dense dims cannot be negative")
         all_names = [field.name for field in self.scalar_fields + self.candidate_fields]
         if len(all_names) != len(set(all_names)):
             raise ValueError("scalar and candidate field names must be unique")
         sequence_names = [domain.name for domain in self.sequence_domains]
         if not sequence_names or len(sequence_names) != len(set(sequence_names)):
             raise ValueError("sequence domain names must be non-empty and unique")
+
+    @property
+    def dense_dim(self) -> int:
+        return self.user_dense_dim + self.item_dense_dim
 
     @property
     def sequence_names(self) -> tuple[str, ...]:

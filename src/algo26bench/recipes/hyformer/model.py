@@ -13,6 +13,7 @@ from algo26bench.nn import (
     MaskSafeMultiheadAttention,
     PointwiseSequenceEncoder,
     QueryBoosting,
+    RankMixerNSTokenizer,
     SemanticGroupTokenizer,
     SequenceTokenizer,
     TransformerSequenceEncoder,
@@ -191,16 +192,49 @@ class HyFormerModel(nn.Module):
                 if field.name in embedding_specs and embedding_specs[field.name] != value:
                     raise ValueError(f"inconsistent repeated field spec: {field.name}")
                 embedding_specs[field.name] = value
-        self.embedding_bank = EmbeddingBank(embedding_specs, config.embedding_dim)
-        self.ns_tokenizer = SemanticGroupTokenizer(
-            self.embedding_bank, semantic_groups, config.d_model
+        self.embedding_bank = EmbeddingBank(
+            embedding_specs,
+            config.embedding_dim,
+            emb_skip_threshold=config.emb_skip_threshold,
         )
-        self.dense_tokenizer = (
-            DenseTokenizer(spec.dense_dim, config.d_model)
-            if spec.dense_dim
+        self.ns_tokenizer_type = config.ns_tokenizer_type
+        if config.ns_tokenizer_type == "rankmixer":
+            self.ns_tokenizer = None
+            self.user_ns_tokenizer = RankMixerNSTokenizer(
+                self.embedding_bank,
+                tuple(field.name for field in spec.scalar_fields),
+                config.user_ns_tokens,
+                config.d_model,
+            )
+            self.item_ns_tokenizer = RankMixerNSTokenizer(
+                self.embedding_bank,
+                tuple(field.name for field in spec.candidate_fields),
+                config.item_ns_tokens,
+                config.d_model,
+            )
+            num_ns_from_int = config.user_ns_tokens + config.item_ns_tokens
+        else:
+            self.ns_tokenizer = SemanticGroupTokenizer(
+                self.embedding_bank, semantic_groups, config.d_model
+            )
+            self.user_ns_tokenizer = None
+            self.item_ns_tokenizer = None
+            num_ns_from_int = len(semantic_groups)
+        self.user_dense_tokenizer = (
+            DenseTokenizer(spec.user_dense_dim, config.d_model)
+            if spec.user_dense_dim
             else None
         )
-        self.num_ns_tokens = len(semantic_groups) + int(self.dense_tokenizer is not None)
+        self.item_dense_tokenizer = (
+            DenseTokenizer(spec.item_dense_dim, config.d_model)
+            if spec.item_dense_dim
+            else None
+        )
+        self.num_ns_tokens = (
+            num_ns_from_int
+            + int(self.user_dense_tokenizer is not None)
+            + int(self.item_dense_tokenizer is not None)
+        )
         self.sequence_tokenizers = nn.ModuleDict(
             {
                 domain.name: SequenceTokenizer(
@@ -250,13 +284,32 @@ class HyFormerModel(nn.Module):
         )
 
     def forward(self, batch: HyFormerBatch) -> ModelOutput:
-        non_sequence_values = dict(batch.scalars)
-        non_sequence_values.update(batch.candidates)
-        ns_tokens = self.ns_tokenizer(non_sequence_values)
-        if self.dense_tokenizer is not None:
-            ns_tokens = torch.cat(
-                [ns_tokens, self.dense_tokenizer(batch.dense)], dim=1
-            )
+        spec = self.context.data_spec
+        parts: list[torch.Tensor] = []
+        if self.ns_tokenizer_type == "rankmixer":
+            parts.append(self.user_ns_tokenizer(batch.scalars))
+            if self.user_dense_tokenizer is not None:
+                parts.append(
+                    self.user_dense_tokenizer(batch.dense[:, : spec.user_dense_dim])
+                )
+            parts.append(self.item_ns_tokenizer(batch.candidates))
+            if self.item_dense_tokenizer is not None:
+                parts.append(
+                    self.item_dense_tokenizer(batch.dense[:, spec.user_dense_dim :])
+                )
+        else:
+            non_sequence_values = dict(batch.scalars)
+            non_sequence_values.update(batch.candidates)
+            parts.append(self.ns_tokenizer(non_sequence_values))
+            if self.user_dense_tokenizer is not None:
+                parts.append(
+                    self.user_dense_tokenizer(batch.dense[:, : spec.user_dense_dim])
+                )
+            if self.item_dense_tokenizer is not None:
+                parts.append(
+                    self.item_dense_tokenizer(batch.dense[:, spec.user_dense_dim :])
+                )
+        ns_tokens = torch.cat(parts, dim=1)
 
         sequences = {
             name: self.sequence_tokenizers[name](

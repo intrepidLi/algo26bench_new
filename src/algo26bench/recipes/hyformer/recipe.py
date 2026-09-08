@@ -24,27 +24,32 @@ class HyFormerRecipe:
         return cls(HyFormerConfig.from_dict(raw))
 
     def prepare(self, context: DataContext) -> PreparedRecipe[HyFormerBatch]:
-        groups = self.config.semantic_groups
-        if not groups:
-            groups = tuple(
-                group
-                for group in (
-                    tuple(field.name for field in context.data_spec.scalar_fields),
-                    tuple(field.name for field in context.data_spec.candidate_fields),
+        if self.config.ns_tokenizer_type == "rankmixer":
+            # rankmixer flattens all fields, so semantic_groups is unused. Pass
+            # an empty groups tuple downstream and skip the coverage check.
+            groups: tuple[tuple[str, ...], ...] = ()
+        else:
+            groups = self.config.semantic_groups
+            if not groups:
+                groups = tuple(
+                    group
+                    for group in (
+                        tuple(field.name for field in context.data_spec.scalar_fields),
+                        tuple(field.name for field in context.data_spec.candidate_fields),
+                    )
+                    if group
                 )
-                if group
-            )
-        covered = [name for group in groups for name in group]
-        expected = {
-            field.name
-            for field in (
-                context.data_spec.scalar_fields + context.data_spec.candidate_fields
-            )
-        }
-        if len(covered) != len(set(covered)) or set(covered) != expected:
-            raise ValueError(
-                "HyFormer semantic_groups must cover every scalar/candidate field once"
-            )
+            covered = [name for group in groups for name in group]
+            expected = {
+                field.name
+                for field in (
+                    context.data_spec.scalar_fields + context.data_spec.candidate_fields
+                )
+            }
+            if len(covered) != len(set(covered)) or set(covered) != expected:
+                raise ValueError(
+                    "HyFormer semantic_groups must cover every scalar/candidate field once"
+                )
 
         encoder_desc, encoder_ref = ENCODER_VARIANTS[self.config.sequence_encoder]
         encoder_mechanisms = (

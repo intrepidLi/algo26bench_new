@@ -1,0 +1,47 @@
+{
+  "recipe": "hyformer",
+  "model": {
+    "embedding_dim": 64,
+    "d_model": 64,
+    "num_heads": 4,
+    "num_layers": 2,
+    "num_queries": 2,
+    "hidden_multiplier": 8,
+    "sequence_encoder": "swiglu",
+    "dropout": 0.01,
+    "emb_skip_threshold": 1000000,
+    "ns_tokenizer_type": "rankmixer",
+    "user_ns_tokens": 4,
+    "item_ns_tokens": 3
+  },
+  "data": {
+    "kind": "pcvr",
+    "data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/split_v2/train/native_parquet_v2",
+    "eval_data_dir": "/apdcephfs_qy3/share_470749/joefzhou/data/alg_2026_sample/20260323_150w_anonymized/predict_v2/native_parquet_v2",
+    "answer_path": "/apdcephfs_fsgm/share_303710656/angel/common/TAAC_2026/ryanylsun/algo26bench_v2/answer.json",
+    "seq_max_lens": {
+      "seq_a": 256,
+      "seq_b": 256,
+      "seq_c": 512,
+      "seq_d": 512
+    },
+    "shuffle": true,
+    "buffer_rows": 4096,
+    "read_batch_size": 1024,
+    "seed": 2026
+  },
+  "training": {
+    "batch_size": 1024,
+    "epochs": 1,
+    "dense_learning_rate": 0.0001,
+    "embedding_learning_rate": 0.05,
+    "seed": 2026,
+    "device": "auto",
+    "num_workers": 8,
+    "output_dir": "output_150w_hyformer_train_eval",
+    "save_best": true,
+    "monitor_task": "pcvr",
+    "monitor_metric": "auc",
+    "monitor_mode": "max"
+  }
+}

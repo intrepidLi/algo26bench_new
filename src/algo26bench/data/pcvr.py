@@ -89,6 +89,13 @@ class PCVRDataConfig:
     buffer_rows: int = 4096
     read_batch_size: int = 1024
     seed: int = 2026
+    # When eval_data_dir is set, the "validation" set becomes the predict
+    # parquet directory with labels sourced from answer_path (a JSON dict
+    # mapping user_id string -> {0,1}). In that mode the training dataset
+    # uses the full data_dir (no valid_ratio slice removed).
+    eval_data_dir: str | None = None
+    eval_schema_path: str | None = None
+    answer_path: str | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> "PCVRDataConfig":
@@ -111,6 +118,10 @@ class PCVRDataConfig:
             raise ValueError("train_row_groups cannot be negative")
         if config.read_batch_size <= 0 or config.buffer_rows < 0:
             raise ValueError("read_batch_size must be positive")
+        if (config.eval_data_dir is None) != (config.answer_path is None):
+            raise ValueError(
+                "eval_data_dir and answer_path must be set together"
+            )
         return config
 
 
@@ -158,6 +169,7 @@ def load_pcvr_schema(
             _DenseColumn(f"user_dense_feats_{int(fid)}", width, offset)
         )
         offset += width
+    user_dense_total = offset
     item_dense_cols: list[_DenseColumn] = []
     for fid, dim in raw.get("item_dense", []):
         width = int(dim)
@@ -165,6 +177,7 @@ def load_pcvr_schema(
             _DenseColumn(f"item_dense_feats_{int(fid)}", width, offset)
         )
         offset += width
+    item_dense_total = offset - user_dense_total
 
     sequences: list[_SequenceLayout] = []
     sequence_specs: list[SequenceDomainSpec] = []
@@ -218,7 +231,8 @@ def load_pcvr_schema(
                 CategoricalField(column.name, column.vocab_size, column.width)
                 for column in item_int
             ),
-            dense_dim=offset,
+            user_dense_dim=user_dense_total,
+            item_dense_dim=item_dense_total,
             sequence_domains=tuple(sequence_specs),
         ),
         task_set=_TASK_SET,
@@ -300,6 +314,22 @@ def _group_id(user_id: object) -> torch.Tensor:
     return torch.tensor(value, dtype=torch.long)
 
 
+def _answer_key(user_id: object) -> str:
+    """Match answer.json's string-int keys ("861152", not "861152.0")."""
+    text = str(user_id)
+    try:
+        return str(int(text))
+    except ValueError:
+        return text
+
+
+def load_answer_labels(path: str | Path) -> dict[str, int]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"answer file {path} is not a JSON object")
+    return {str(k): int(v) for k, v in raw.items()}
+
+
 def list_row_groups(data_dir: str) -> list[tuple[str, int, int]]:
     files = sorted(glob.glob(os.path.join(data_dir, "*.parquet")))
     if not files:
@@ -354,6 +384,7 @@ class PCVRParquetDataset(IterableDataset[RawExample]):
         read_batch_size: int = 1024,
         seed: int = 2026,
         is_training: bool = True,
+        answer_labels: Mapping[int, int] | None = None,
     ) -> None:
         super().__init__()
         if not row_groups:
@@ -367,6 +398,7 @@ class PCVRParquetDataset(IterableDataset[RawExample]):
         self.read_batch_size = read_batch_size
         self.seed = seed
         self.is_training = is_training
+        self.answer_labels = answer_labels
         self.num_rows = sum(rows for _, _, rows in self.row_groups)
 
     def __iter__(self) -> Iterator[RawExample]:
@@ -432,7 +464,16 @@ class PCVRParquetDataset(IterableDataset[RawExample]):
     ) -> list[RawExample]:
         by_name = {name: batch.column(name) for name in batch.schema.names}
         rows = batch.num_rows
-        if self.is_training:
+        user_ids = by_name["user_id"].to_pylist()
+        if self.answer_labels is not None:
+            labels = np.array(
+                [
+                    int(self.answer_labels.get(_answer_key(uid), 0))
+                    for uid in user_ids
+                ],
+                dtype=np.bool_,
+            )
+        elif self.is_training:
             labels = (
                 by_name["label_type"]
                 .fill_null(0)
@@ -442,7 +483,6 @@ class PCVRParquetDataset(IterableDataset[RawExample]):
             )
         else:
             labels = np.zeros(rows, dtype=np.bool_)
-        user_ids = by_name["user_id"].to_pylist()
 
         user_values = {
             column.name: self._int_column(by_name[column.parquet_column], column)
@@ -608,17 +648,43 @@ def build_pcvr_datasets(
     Under DDP, each rank sees a disjoint slice of the training row groups
     (round-robin), and every rank sees the full validation set (only rank 0
     evaluates, other ranks skip the eval pass).
+
+    When ``config.eval_data_dir`` and ``config.answer_path`` are set, the
+    "valid" dataset is built from that predict parquet directory with labels
+    looked up in the answer JSON (keyed by ``user_id``); in that mode the
+    training set uses every row group in ``config.data_dir`` (no valid slice
+    removed) since a real held-out eval set exists.
     """
 
     schema_path = config.schema_path or os.path.join(config.data_dir, "schema.json")
     schema = load_pcvr_schema(schema_path, config.seq_max_lens)
     groups = list_row_groups(config.data_dir)
-    train_indices, valid_range = split_row_groups(
-        groups,
-        valid_ratio=config.valid_ratio,
-        train_ratio=config.train_ratio,
-        train_row_groups=config.train_row_groups,
-    )
+
+    external_eval = config.eval_data_dir is not None
+    if external_eval:
+        # Use every training row group; sub-select via train_row_groups if set.
+        n_train = len(groups)
+        if config.train_row_groups > 0:
+            selected = min(int(config.train_row_groups), n_train)
+        elif config.train_ratio < 1.0:
+            selected = max(1, int(n_train * config.train_ratio))
+        else:
+            selected = n_train
+        if selected < n_train:
+            train_indices = [
+                ((2 * index + 1) * n_train) // (2 * selected)
+                for index in range(selected)
+            ]
+        else:
+            train_indices = list(range(n_train))
+        valid_range = (n_train, n_train)  # unused
+    else:
+        train_indices, valid_range = split_row_groups(
+            groups,
+            valid_ratio=config.valid_ratio,
+            train_ratio=config.train_ratio,
+            train_row_groups=config.train_row_groups,
+        )
     if world_size > 1:
         # Round-robin sharding: rank r takes indices [r, r+ws, r+2ws, ...].
         # This preserves the even-spacing property of split_row_groups.
@@ -639,18 +705,40 @@ def build_pcvr_datasets(
         seed=config.seed + rank,
         is_training=True,
     )
-    valid_groups = groups[valid_range[0] : valid_range[1]]
-    if not valid_groups:
-        valid_groups = [groups[-1]]
-    valid = PCVRParquetDataset(
-        schema,
-        valid_groups,
-        clip_vocab=config.clip_vocab,
-        keep_recent=config.keep_recent,
-        shuffle=False,
-        buffer_rows=0,
-        read_batch_size=config.read_batch_size,
-        seed=config.seed,
-        is_training=True,
-    )
+    if external_eval:
+        eval_schema_path = config.eval_schema_path or os.path.join(
+            config.eval_data_dir, "schema.json"
+        )
+        # Reuse the train schema so vocab/dense layouts match the model; the
+        # predict schema is only referenced to sanity-check column presence.
+        _ = load_pcvr_schema(eval_schema_path, config.seq_max_lens)
+        answer_labels = load_answer_labels(config.answer_path)
+        eval_groups = list_row_groups(config.eval_data_dir)
+        valid = PCVRParquetDataset(
+            schema,
+            eval_groups,
+            clip_vocab=config.clip_vocab,
+            keep_recent=config.keep_recent,
+            shuffle=False,
+            buffer_rows=0,
+            read_batch_size=config.read_batch_size,
+            seed=config.seed,
+            is_training=False,
+            answer_labels=answer_labels,
+        )
+    else:
+        valid_groups = groups[valid_range[0] : valid_range[1]]
+        if not valid_groups:
+            valid_groups = [groups[-1]]
+        valid = PCVRParquetDataset(
+            schema,
+            valid_groups,
+            clip_vocab=config.clip_vocab,
+            keep_recent=config.keep_recent,
+            shuffle=False,
+            buffer_rows=0,
+            read_batch_size=config.read_batch_size,
+            seed=config.seed,
+            is_training=True,
+        )
     return schema, train, valid
